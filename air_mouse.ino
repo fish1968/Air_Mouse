@@ -11,12 +11,12 @@
 #define LONG_PRESS_TIME         (1000/TOUCH_KEY_SCAN_PERIOD)
 
 #define TOUCH_KEY_NO_CHANGE           0x00
-#define TOUCH_KEY_DOWN                0x20
-#define TOUCH_KEY_UP                  0x40
-#define TOUCH_KEY_LONG_PRESS          0x80
+#define TOUCH_KEY_DOWN                0x01 << 5 
+#define TOUCH_KEY_UP                  0x01 << 6
+#define TOUCH_KEY_LONG_PRESS          0x01 << 7
 
 BleMouse bleMouse;
-MPU6050 accelgyro;
+MPU6050 accelgyro; // not used for now
 
 void setup()
 {
@@ -122,31 +122,36 @@ void loop()
     digitalWrite(LED_PIN, 0);
   }
 }
+/*----------------------------------------------
+Function: get filtered update value
+Parameter: uint16_t[3]
+Return: filtered update value
+----------------------------------------------*/
 uint16_t u16AverageFilter(uint16_t Value[])
 {
   uint16_t val, average;
-  uint8_t min;
+  uint8_t min_val_idx;
   uint32_t sum;
   if (Value[0] < Value[1])
   {
     val = Value[0];
-    min = 0;
+    min_val_idx = 0;
   }
   else
   {
     val = Value[1];
-    min = 1;
+    min_val_idx = 1;
   }
   if (Value[2] < val)
   {
     val = Value[2];
-    min = 2;
+    min_val_idx = 2;
   }
   sum = (uint32_t)Value[0] + Value[1] + Value[2];
   average = sum / 3;
-  if ((average - Value[min]) > 10)
+  if ((average - Value[min_val_idx]) > 10)
   {
-    average = (sum - Value[min]) / 2;
+    average = (sum - Value[min_val_idx]) / 2;
   }
   return average;
 }
@@ -154,10 +159,10 @@ uint16_t u16AverageFilter(uint16_t Value[])
 Function: Touch Key scan
 Parameter: void
 Return: bit0~4 Touch Key number,
-    bit5~7 Touch Key status: 0x00 no press, 0x20 Touch Key down, 
+    bit5~7 Touch Key status: TOUCH_KEY_NO_CHANGE no press, TOUCH_KEY_DOWN Touch Key down, 
     0x40 Touch Key up, 0x80 Touch Key long press,
     0xC0 Touch Key up after long press.
-Comments: Scan Touch Keys in 100mS
+Comments: Scan period is determiend by TOUCH_KEY_SCAN_PERIOD
 ----------------------------------------------*/
 uint8_t u8TouchKeyScan(void)
 {
@@ -166,23 +171,22 @@ uint8_t u8TouchKeyScan(void)
     static uint8_t s_a_u8TouchKeyTimeCount[TOUCH_KEY_QUANTIY];
     static uint8_t s_a_u8Status[TOUCH_KEY_QUANTIY];
     static uint16_t s_aa_u16TouchValue[TOUCH_KEY_QUANTIY][3];
-    uint8_t u8i;
+    uint8_t u8i; // time, key number
     u8i = millis();
     if ((uint8_t)(u8i - s_u8ScanedTime) >= TOUCH_KEY_SCAN_PERIOD)
     {
         s_u8ScanedTime = u8i;
         for (u8i=0;u8i<TOUCH_KEY_QUANTIY;u8i++)
         {
-            s_a_u8TouchKey[u8i] = (s_a_u8TouchKey[u8i] << 1) & 0x02;
+            s_a_u8TouchKey[u8i] = (s_a_u8TouchKey[u8i] << 1) & 0x02; // move last key down info from bit[0] to bit[1]
         }
         s_u8Sequence++;
-        if (s_u8Sequence >= 3)
-        {
-          s_u8Sequence = 0;
-        }
+        s_u8Sequence %= TOUCH_KEY_QUANTIY;
+        // read analog value of each key from ADC 
         s_aa_u16TouchValue[0][s_u8Sequence] = touchRead(T0); /* left key */
         s_aa_u16TouchValue[1][s_u8Sequence] = touchRead(T4); /* middle key */
         s_aa_u16TouchValue[2][s_u8Sequence] = touchRead(T5); /* right key */
+
         for (u8i=0;u8i<TOUCH_KEY_QUANTIY;u8i++)
         {
             if(u16AverageFilter(s_aa_u16TouchValue[u8i]) < TOUCH_THRESHOLD) /*Touch Key0 pressed*/
@@ -191,13 +195,13 @@ uint8_t u8TouchKeyScan(void)
             }
             switch (s_a_u8TouchKey[u8i])
             {
-            case 0x01:
+            case 0x01: // new key down and init a "timer" for long press judgement
                 s_a_u8Status[u8i] = TOUCH_KEY_DOWN;
                 s_a_u8TouchKeyTimeCount[u8i] = 0;
                 return (TOUCH_KEY_DOWN | u8i);
-            case 0x02:
+            case 0x02: // key released from down
                 return (((s_a_u8Status[u8i] & TOUCH_KEY_LONG_PRESS) | TOUCH_KEY_UP) | u8i);
-            case 0x03:
+            case 0x03: // key is continuely pressed and detect long press
                 if (TOUCH_KEY_DOWN == s_a_u8Status[u8i])
                 {
                     s_a_u8TouchKeyTimeCount[u8i]++;
@@ -208,7 +212,7 @@ uint8_t u8TouchKeyScan(void)
                     }
                 }
                 break;
-            default:    /*case 0x00*/
+            default:    /*case TOUCH_KEY_NO_CHANGE*/
                 break;
             }
         }
